@@ -3,7 +3,18 @@ import os
 import time
 import random
 from datetime import datetime
+from io import BytesIO
 from openai import OpenAI
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    HRFlowable, KeepTogether
+)
+from reportlab.pdfgen import canvas as pdf_canvas
 
 st.set_page_config(
     page_title="AEGIS-NET | Command Center",
@@ -432,6 +443,206 @@ def render_health_row(label: str, value: str, css_class: str = "health-value"):
     )
 
 
+def generate_pdf(
+    scenario: str,
+    threat: str,
+    sensor_data: str,
+    scout: str,
+    logistics: str,
+    dispatcher: str,
+    timestamp: str,
+) -> bytes:
+    buf = BytesIO()
+
+    # ── Colour palette ───────────────────────────────────────────────────────
+    C_BG        = colors.HexColor("#060d1a")
+    C_HEADER_BG = colors.HexColor("#080f20")
+    C_BORDER    = colors.HexColor("#0f3460")
+    C_CYAN      = colors.HexColor("#00d4ff")
+    C_PURPLE    = colors.HexColor("#7b61ff")
+    C_RED       = colors.HexColor("#ff3366")
+    C_GREEN     = colors.HexColor("#00ff88")
+    C_AMBER     = colors.HexColor("#ffaa00")
+    C_TEXT      = colors.HexColor("#c8d8e8")
+    C_MUTED     = colors.HexColor("#4a7fa5")
+    C_WHITE     = colors.white
+
+    threat_color = C_RED if threat in ("CRITICAL", "EXTREME") else (C_AMBER if threat == "SEVERE" else C_CYAN)
+
+    W, H = A4
+
+    # ── Page template with header/footer ────────────────────────────────────
+    def draw_page_chrome(c, doc):
+        c.saveState()
+        # Full dark background
+        c.setFillColor(C_BG)
+        c.rect(0, 0, W, H, fill=1, stroke=0)
+
+        # Top cyan accent bar
+        c.setFillColor(C_CYAN)
+        c.rect(0, H - 6, W, 6, fill=1, stroke=0)
+
+        # Header band
+        c.setFillColor(C_HEADER_BG)
+        c.rect(0, H - 36, W, 30, fill=1, stroke=0)
+
+        c.setFont("Courier-Bold", 9)
+        c.setFillColor(C_CYAN)
+        c.drawString(20, H - 26, "AEGIS-NET  |  INCIDENT RECOVERY REPORT")
+        c.setFont("Courier", 7)
+        c.setFillColor(C_MUTED)
+        c.drawRightString(W - 20, H - 26, f"GENERATED: {timestamp}  |  CLASSIFICATION: FOR OFFICIAL USE ONLY")
+
+        # Bottom accent bar
+        c.setFillColor(C_BORDER)
+        c.rect(0, 0, W, 18, fill=1, stroke=0)
+        c.setFillColor(C_RED)
+        c.rect(0, 0, W, 3, fill=1, stroke=0)
+
+        c.setFont("Courier", 6.5)
+        c.setFillColor(C_MUTED)
+        c.drawCentredString(W / 2, 6, f"AEGIS-NET AUTONOMOUS RECOVERY SYSTEM  •  PAGE {doc.page}  •  CONFIDENTIAL")
+        c.restoreState()
+
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        topMargin=46,
+        bottomMargin=26,
+        leftMargin=20 * mm,
+        rightMargin=20 * mm,
+        title=f"AEGIS-NET Incident Report — {scenario}",
+    )
+
+    # ── Styles ───────────────────────────────────────────────────────────────
+    def style(name, **kw):
+        return ParagraphStyle(
+            name,
+            fontName=kw.get("fontName", "Courier"),
+            fontSize=kw.get("fontSize", 9),
+            textColor=kw.get("textColor", C_TEXT),
+            alignment=kw.get("alignment", TA_LEFT),
+            leading=kw.get("leading", 14),
+            spaceAfter=kw.get("spaceAfter", 2),
+            spaceBefore=kw.get("spaceBefore", 0),
+            backColor=kw.get("backColor", None),
+            leftIndent=kw.get("leftIndent", 0),
+            rightIndent=kw.get("rightIndent", 0),
+        )
+
+    s_title    = style("title",    fontName="Courier-Bold", fontSize=22, textColor=C_CYAN,   alignment=TA_CENTER, leading=28, spaceAfter=4)
+    s_subtitle = style("subtitle", fontName="Courier",      fontSize=8,  textColor=C_MUTED,  alignment=TA_CENTER, leading=12, spaceAfter=14)
+    s_agent    = style("agent",    fontName="Courier-Bold", fontSize=11, textColor=C_CYAN,   leading=16, spaceAfter=4, spaceBefore=10)
+    s_role     = style("role",     fontName="Courier",      fontSize=7,  textColor=C_MUTED,  leading=10, spaceAfter=6)
+    s_body     = style("body",     fontName="Courier",      fontSize=8,  textColor=C_TEXT,   leading=12, spaceAfter=2)
+    s_sensor   = style("sensor",   fontName="Courier",      fontSize=7.5,textColor=C_MUTED,  leading=11, spaceAfter=2, leftIndent=6)
+    s_label    = style("label",    fontName="Courier-Bold", fontSize=7,  textColor=C_MUTED,  leading=10)
+    s_value    = style("value",    fontName="Courier-Bold", fontSize=7,  textColor=C_WHITE,  leading=10)
+
+    story = []
+
+    # ── Cover block ──────────────────────────────────────────────────────────
+    story.append(Spacer(1, 10))
+    story.append(Paragraph("AEGIS-NET", s_title))
+    story.append(Paragraph("MULTI-AGENT AUTONOMOUS INFRASTRUCTURE RECOVERY REPORT", s_subtitle))
+
+    # Metadata table
+    meta_data = [
+        ["INCIDENT TYPE", scenario.upper(), "THREAT LEVEL", threat],
+        ["TIMESTAMP (UTC)", timestamp,       "AI MODEL",     "meta/llama-3.1-70b-instruct"],
+        ["AGENTS DEPLOYED", "3 (SCOUT-1 / LOGISTICS-ALPHA / DISPATCH-OMEGA)", "STATUS", "COMPLETE"],
+    ]
+    meta_col_widths = [38*mm, 62*mm, 38*mm, 42*mm]
+    meta_tbl = Table(meta_data, colWidths=meta_col_widths)
+    meta_tbl.setStyle(TableStyle([
+        ("BACKGROUND",  (0, 0), (-1, -1), C_HEADER_BG),
+        ("GRID",        (0, 0), (-1, -1), 0.5, C_BORDER),
+        ("FONTNAME",    (0, 0), (0, -1),  "Courier-Bold"),
+        ("FONTNAME",    (2, 0), (2, -1),  "Courier-Bold"),
+        ("FONTNAME",    (1, 0), (1, -1),  "Courier"),
+        ("FONTNAME",    (3, 0), (3, -1),  "Courier"),
+        ("FONTSIZE",    (0, 0), (-1, -1), 7),
+        ("TEXTCOLOR",   (0, 0), (0, -1),  C_MUTED),
+        ("TEXTCOLOR",   (2, 0), (2, -1),  C_MUTED),
+        ("TEXTCOLOR",   (1, 0), (1, -1),  C_WHITE),
+        ("TEXTCOLOR",   (3, 0), (3, -1),  threat_color),
+        ("TOPPADDING",  (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING",(0,0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING",(0, 0), (-1, -1), 6),
+        ("LINEABOVE",   (0, 0), (-1, 0),  2, C_CYAN),
+    ]))
+    story.append(meta_tbl)
+    story.append(Spacer(1, 8))
+
+    # Sensor data box
+    story.append(HRFlowable(width="100%", thickness=0.5, color=C_BORDER))
+    story.append(Spacer(1, 4))
+    story.append(Paragraph("◈  RAW SENSOR / FIELD REPORT", s_label))
+    story.append(Spacer(1, 3))
+    sensor_tbl = Table([[Paragraph(sensor_data.strip(), s_sensor)]], colWidths=[170*mm])
+    sensor_tbl.setStyle(TableStyle([
+        ("BACKGROUND",   (0,0), (-1,-1), C_HEADER_BG),
+        ("BOX",          (0,0), (-1,-1), 0.5, C_BORDER),
+        ("LEFTLINEBEFORE",(0,0),(-1,-1), 2, C_PURPLE),
+        ("TOPPADDING",   (0,0), (-1,-1), 6),
+        ("BOTTOMPADDING",(0,0), (-1,-1), 6),
+        ("LEFTPADDING",  (0,0), (-1,-1), 8),
+        ("RIGHTPADDING", (0,0), (-1,-1), 8),
+    ]))
+    story.append(sensor_tbl)
+    story.append(Spacer(1, 10))
+
+    # ── Agent output sections ────────────────────────────────────────────────
+    agents = [
+        ("SCOUT-1",          "Hazard Identification & Threat Assessment Agent",    C_PURPLE, scout),
+        ("LOGISTICS-ALPHA",  "Resource Deployment & Transit Rerouting Strategist", C_CYAN,   logistics),
+        ("DISPATCH-OMEGA",   "Emergency Communications & Government Briefing Director", C_RED, dispatcher),
+    ]
+
+    for ag_name, ag_role, ag_color, ag_text in agents:
+        # Section header bar
+        header_tbl = Table(
+            [[Paragraph(f"▶  {ag_name}", ParagraphStyle("ah", fontName="Courier-Bold", fontSize=11, textColor=ag_color, leading=16)),
+              Paragraph("COMPLETED", ParagraphStyle("ab", fontName="Courier-Bold", fontSize=7, textColor=ag_color, leading=16, alignment=TA_RIGHT))]],
+            colWidths=[140*mm, 30*mm]
+        )
+        header_tbl.setStyle(TableStyle([
+            ("BACKGROUND",    (0,0),(-1,-1), C_HEADER_BG),
+            ("LINEBELOW",     (0,0),(-1,-1), 1.5, ag_color),
+            ("LINEABOVE",     (0,0),(-1,-1), 0.3, C_BORDER),
+            ("LEFTPADDING",   (0,0),(-1,-1), 8),
+            ("RIGHTPADDING",  (0,0),(-1,-1), 8),
+            ("TOPPADDING",    (0,0),(-1,-1), 5),
+            ("BOTTOMPADDING", (0,0),(-1,-1), 5),
+        ]))
+        story.append(KeepTogether([
+            header_tbl,
+            Spacer(1, 2),
+            Paragraph(ag_role, ParagraphStyle("ar", fontName="Courier", fontSize=6.5, textColor=C_MUTED, leading=10, spaceAfter=6)),
+        ]))
+
+        # Body text
+        for line in ag_text.strip().split("\n"):
+            stripped = line.strip()
+            if not stripped:
+                story.append(Spacer(1, 3))
+            elif stripped.startswith("---") or stripped.isupper() and len(stripped) < 60:
+                story.append(Paragraph(
+                    stripped,
+                    ParagraphStyle("sec", fontName="Courier-Bold", fontSize=8, textColor=ag_color, leading=13, spaceBefore=6, spaceAfter=2)
+                ))
+            else:
+                story.append(Paragraph(stripped, s_body))
+
+        story.append(Spacer(1, 8))
+        story.append(HRFlowable(width="100%", thickness=0.4, color=C_BORDER))
+        story.append(Spacer(1, 4))
+
+    doc.build(story, onFirstPage=draw_page_chrome, onLaterPages=draw_page_chrome)
+    return buf.getvalue()
+
+
 def simulate_health():
     return {
         "CPU Load": (f"{random.randint(34, 58)}%", "health-value"),
@@ -707,6 +918,41 @@ if launch_clicked:
             '</div>',
             unsafe_allow_html=True
         )
+
+        # ── PDF Export ────────────────────────────────────────────────────────
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown('<div class="section-heading">⬡ EXPORT INCIDENT REPORT</div>', unsafe_allow_html=True)
+
+        report_ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        safe_name = selected_scenario.replace(" ", "_").replace("[", "").replace("]", "")
+        file_name = f"AEGIS-NET_Report_{safe_name}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.pdf"
+
+        col_exp1, col_exp2, col_exp3 = st.columns([1, 2, 1])
+        with col_exp2:
+            with st.spinner("Compiling report..."):
+                pdf_bytes = generate_pdf(
+                    scenario=selected_scenario,
+                    threat=scenario_data["threat"],
+                    sensor_data=sensor_data,
+                    scout=scout_result,
+                    logistics=logistics_result,
+                    dispatcher=dispatcher_result,
+                    timestamp=report_ts,
+                )
+            st.download_button(
+                label="📄  DOWNLOAD FULL INCIDENT REPORT  (PDF)",
+                data=pdf_bytes,
+                file_name=file_name,
+                mime="application/pdf",
+                use_container_width=True,
+            )
+            st.markdown(
+                f'<div style="font-family:\'Share Tech Mono\',monospace;font-size:0.6rem;'
+                f'color:#1a3a5c;text-align:center;margin-top:0.4rem;letter-spacing:1px;">'
+                f'INCLUDES: THREAT ASSESSMENT · DEPLOYMENT PLAN · PUBLIC ALERT · GOVT BRIEF<br>'
+                f'CLASSIFICATION: FOR OFFICIAL USE ONLY  •  {report_ts}</div>',
+                unsafe_allow_html=True
+            )
 
 else:
     # ── Idle State ────────────────────────────────────────────────────────────
